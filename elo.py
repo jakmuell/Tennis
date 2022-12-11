@@ -130,14 +130,20 @@ def update_elo(M,P,c,o,s1,initial_elo,recentdays,penaltyfactor):
     return M, P
 
 def main():
-    os.chdir('C:\\Users\\jakob\MATLAB Drive\\Tennis')
-    master = pd.read_csv('master.csv')
+    # Change working directory to the directory where file elo.py is located
+    abspath = os.path.abspath(__file__)
+    dname = os.path.dirname(abspath)
+    os.chdir(dname)
+    print(os.getcwd())
+
+    # Read matches.csv and 
+    master = pd.read_csv('matches.csv')
     M=sort_master_table(master)
     M=transform_to_set_format(M)
     #M=M.loc[0:200]
     P = pd.read_csv('elo_ratings_yearend_2009.csv')
-    #master_transformed = transform_to_set_format(master)
-    #master_transformed.to_csv('master_transformed.csv')
+    # master_transformed = transform_to_set_format(master) ..
+    #master_transformed.to_csv('master_transformed.csv') ..
     all_names = set(M.winner_name).union(set(M.loser_name))
     available_names = set(P.Name)
     unavalaible_names = all_names.difference(available_names)
@@ -146,8 +152,8 @@ def main():
     P_unavailable["match_number"]=0
     P=pd.concat([P,P_unavailable]).reset_index(drop=True)
     M,P = update_elo(M,P,250,20,0.6,1400,75,0.985)
-    M.to_csv('master_test.csv')
-    P.to_csv('P_test.csv')
+    M.to_csv('matches2.csv')
+    P.to_csv('players_elos.csv')
 
 
 main()
