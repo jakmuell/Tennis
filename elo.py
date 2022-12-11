@@ -136,14 +136,12 @@ def main():
     os.chdir(dname)
     print(os.getcwd())
 
-    # Read matches.csv and 
+    # Read matches.csv and make necessary transformations
     master = pd.read_csv('matches.csv')
     M=sort_master_table(master)
     M=transform_to_set_format(M)
     #M=M.loc[0:200]
     P = pd.read_csv('elo_ratings_yearend_2009.csv')
-    # master_transformed = transform_to_set_format(master) ..
-    #master_transformed.to_csv('master_transformed.csv') ..
     all_names = set(M.winner_name).union(set(M.loser_name))
     available_names = set(P.Name)
     unavalaible_names = all_names.difference(available_names)
