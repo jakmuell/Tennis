@@ -5,6 +5,9 @@ import datetime
 import re
 import numpy as np
 import pandas as pd
+from math import exp
+from math import floor
+import time
 
 def sort_matches_table(M,startdate):
     # This function returns the table M in chronological order (ascending, only entries after start_date, everything else is deleted)
@@ -25,7 +28,7 @@ def sort_matches_table(M,startdate):
     M_final = M_merged.sort_values(by=["date2","roundvalue"])
     M_final = M_final.reset_index(drop=True)
     # Delete the auxiliary variables
-    M_final = M_final.drop(["date2","roundvalue"], axis=1)
+    M_final = M_final.drop(["roundvalue"], axis=1)
     return M_final
 
 def transform_to_set_format(M):
@@ -88,11 +91,11 @@ def transform_to_set_format(M):
     N = N.drop(["set1","set2","set3","set4","set5","set1_winner","set2_winner","set3_winner","set4_winner","set5_winner"], axis=1)
     return N
 
-def update_elo(M,P,c,o,s1,initial_elo,recentdays,penaltyfactor):
+def update_elo(M,P,c,c_hard,c_clay,c_grass,o,s1,initial_elo,recentdays,penaltyfactor,start_row,end_row):
     # Input parameters:
     # M is a data frame of matches
     # P is a data frame consisting of players and their starting elos
-    # c is a constant
+    # c, c_hard, c_clay, c_grass are constants
     # o is a small offset
     # s1 is a shape parameter
     # initial_elo is the rating given to new players (that are not in P)
@@ -101,31 +104,124 @@ def update_elo(M,P,c,o,s1,initial_elo,recentdays,penaltyfactor):
 
     # The function returns M appended by the variables "winner_elo", "loser_elo" and the updated P
 
-    n=len(M.index)
-    for i in range(n-1):
-        winner_row = np.where(P["Name"] == M.loc[i,"winner_name"])[0][0] # index of row in table P where winner is located
-        loser_row = np.where(P["Name"] == M.loc[i,"loser_name"])[0][0] # index of row in table P where loser is located
-        w_elo_old=P.loc[winner_row,"EloRating"]
-        l_elo_old=P.loc[loser_row,"EloRating"]
+    t = time.time()
+    for i in range(start_row,end_row):
+        winner_name = M.winner_name[i]
+        loser_name = M.loser_name[i]
+
+        # Retrieve data from P (numbers before the match)
+        winner_row = np.where(P["Name"] == winner_name)[0][0] # position of winner in P
+        loser_row = np.where(P["Name"] == loser_name)[0][0] # position of loser in P
+        w_elo_old=P.loc[winner_row,"elo_overall"]
+        l_elo_old=P.loc[loser_row,"elo_overall"]
         w_match_number=P.loc[winner_row,"match_number"]
         l_match_number=P.loc[loser_row,"match_number"]
-        w_activityfactor=1
         l_activityfactor=1
         w_setwinprob=1/(1+10**((l_elo_old-w_elo_old)/400))
         total_sets=M.winner_setswon[i]+M.loser_setswon[i]
+        
+        # The variables "winner_previous_match" and "loser_previous_match" give the id of the previous match
+        # This is unrelated to the Elo but it also requires an iterative algorithm, so we deal with it in this script as well
+        # These variables can later be used to determine other variables, e.g. "different_surface", "retired_last_match" etc.
+        M.loc[i,"winner_previous_match"] = P.previous_match[winner_row]
+        M.loc[i,"loser_previous_match"] = P.previous_match[loser_row]
+        P.loc[winner_row,"previous_match"] = M.match_id[i]
+        P.loc[loser_row,"previous_match"] = M.match_id[i]
+        
+        # Now we can calculate the Elo after the match
+        # We use a weighted Elo algorithm (weight = number of sets the player won)
+
+        # Calculate the activityfactors (if players have few recent matches, the K factor will be higher)
+        # We use the formula activityfactor = exp(-0.4*recentmatches)+1
+        # So 0 recentmatches -> activityfactor=2, 1 recentmatches -> activityfactor=1.67, ..., 10 recentmatches -> factor=1.02, ...
+        # If recentmatches=0 there will also be a penalty (because players tend to be weaker after an injury break)
+        if w_match_number>= 40: # We only do this for players with at least 40 games (below this, data too unreliable)
+            date_cutoff = M.date2[i]-datetime.timedelta(days=recentdays)
+            row_cutoff = M['date2'].gt(date_cutoff).idxmax() # first instance of the variable date2 being >= date_cutoff
+            recent_matches = M.loc[row_cutoff:(i-1),:]
+            w_recentmatches = sum((recent_matches.winner_name==winner_name) | (recent_matches.loser_name==winner_name))
+            w_activityfactor=exp(-0.4*w_recentmatches)+1
+            if w_recentmatches==0:
+                w_penaltyfactor=1-(1-penaltyfactor)/(1+exp(-0.05*(w_elo_old-1910))*((1/0.995)-1))
+                w_elo_old=w_elo_old*w_penaltyfactor
+            if l_match_number>= 40:
+                l_recentmatches = sum((recent_matches.winner_name==loser_name) | (recent_matches.loser_name==loser_name))
+                l_activityfactor=exp(-0.4*l_recentmatches)+1
+                if l_recentmatches==0:
+                    l_penaltyfactor=1-(1-penaltyfactor)/(1+exp(-0.05*(l_elo_old-1910))*((1/0.995)-1))
+                    l_elo_old=l_elo_old*l_penaltyfactor
+            else:
+                l_activityfactor=1
+        else:
+            w_activityfactor=1
+            if l_match_number>=40:
+                date_cutoff = M.date2[i]-datetime.timedelta(days=recentdays)
+                row_cutoff = M['date2'].gt(date_cutoff).idxmax()
+                recent_matches = M.loc[row_cutoff:(i-1),:]
+                l_recentmatches = sum((recent_matches.winner_name==loser_name) | (recent_matches.loser_name==loser_name))
+                l_activityfactor=exp(-0.4*l_recentmatches)+1
+                if l_recentmatches==0:
+                    l_penaltyfactor=1-(1-penaltyfactor)/(1+exp(-0.05*(l_elo_old-1910))*((1/0.995)-1))
+                    l_elo_old=l_elo_old*l_penaltyfactor
+            else:
+                l_activityfactor=1
+    
         w_K=w_activityfactor*c/(w_match_number+o)**s1
         l_K=l_activityfactor*c/(l_match_number+o)**s1
         M.loc[i,"winner_elo"]=w_elo_old+w_K*M.winner_setswon[i]-w_setwinprob*w_K*total_sets
         M.loc[i,"loser_elo"]=l_elo_old+l_K*total_sets*w_setwinprob-M.winner_setswon[i]*l_K
-        P.loc[winner_row,"EloRating"]=M.winner_elo[i]
-        P.loc[loser_row,"EloRating"]=M.loser_elo[i]
+        P.loc[winner_row,"elo_overall"]=M.winner_elo[i]
+        P.loc[loser_row,"elo_overall"]=M.loser_elo[i]
         P.loc[winner_row,"match_number"]+=1
         P.loc[loser_row,"match_number"]+=1
 
-    P = P.sort_values(by=["EloRating","roundvalue"])
+        surface = M.surface[i]
+        if surface == "Hard":
+            w_elo_old_surface = P.loc[winner_row,"elo_hard"]
+            l_elo_old_surface = P.loc[loser_row,"elo_hard"]
+            w_match_number_surface = P.loc[winner_row,"match_number_hard"]
+            l_match_number_surface = P.loc[loser_row,"match_number_hard"]
+            c_surface = c_hard
+        elif surface == "Clay":
+            w_elo_old_surface = P.loc[winner_row,"elo_clay"]
+            l_elo_old_surface = P.loc[loser_row,"elo_clay"]
+            w_match_number_surface = P.loc[winner_row,"match_number_clay"]
+            l_match_number_surface = P.loc[loser_row,"match_number_clay"]
+            c_surface = c_clay
+        else: # grass or carpet
+            w_elo_old_surface = P.loc[winner_row,"elo_grass"]
+            l_elo_old_surface = P.loc[loser_row,"elo_grass"]
+            w_match_number_surface = P.loc[winner_row,"match_number_grass"]
+            l_match_number_surface = P.loc[loser_row,"match_number_grass"]
+            c_surface = c_grass
+        w_setwinprob_surface = 1/(1+10**((l_elo_old_surface-w_elo_old_surface)/400))
+        w_K_surface=w_activityfactor*c_surface/(w_match_number_surface+o)**s1
+        l_K_surface=l_activityfactor*c_surface/(l_match_number_surface+o)**s1
+        M.loc[i,"winner_elo_surface"]=w_elo_old_surface+w_K_surface*M.winner_setswon[i]-w_setwinprob_surface*w_K_surface*total_sets
+        M.loc[i,"loser_elo_surface"]=l_elo_old_surface+l_K_surface*total_sets*w_setwinprob_surface-M.winner_setswon[i]*l_K_surface
+        if surface == "Hard":
+            P.loc[winner_row,"elo_hard"]=M.winner_elo_surface[i]
+            P.loc[loser_row,"elo_hard"]=M.loser_elo_surface[i]
+            P.loc[winner_row,"match_number_hard"]+=1
+            P.loc[loser_row,"match_number_hard"]+=1
+        elif surface == "Clay":
+            P.loc[winner_row,"elo_clay"]=M.winner_elo_surface[i]
+            P.loc[loser_row,"elo_clay"]=M.loser_elo_surface[i]
+            P.loc[winner_row,"match_number_clay"]+=1
+            P.loc[loser_row,"match_number_clay"]+=1
+        else:
+            P.loc[winner_row,"elo_grass"]=M.winner_elo_surface[i]
+            P.loc[loser_row,"elo_grass"]=M.loser_elo_surface[i]
+            P.loc[winner_row,"match_number_grass"]+=1
+            P.loc[loser_row,"match_number_grass"]+=1
+    
+    elapsed = time.time() - t
+    print("Rows {} up to {} succesfully calculated in {} seconds".format(start_row+1,end_row+1,elapsed))
+
+    P = P.sort_values(by=["elo_overall"], ascending = False)
     P = P.reset_index(drop=True)
 
-    return M, P
+    return M, P, elapsed
 
 def main():
     # Change working directory to the directory where file elo.py is located
@@ -141,10 +237,15 @@ def main():
     print('You may either calculate everything from scratch or from a specific start date.')
     print('If you choose method 1, the file \"elo_ratings_yearend_2009.csv\" will be used for the start elos.')
     print('If you choose method 2, you will need to specify an alternative file for that purpose.')
-    print('Type 1 or 2.')
+    print('Type 1 or 2 (currently only method 1 supported).')
     input1 = int(input())
+
+    # Ask user if they want to use default parameters or set parameters manually
+    print('Do you want to use the default parameters for Elo algorithm (type 1) or set values manually (type 2)?')
+    input2 = int(input())
+
     if input1==1:
-        startdate = datetime.datetime.strptime("2009-12-01", '%Y-%m-%d %H:%M')
+        startdate = datetime.datetime.strptime("2009-12-01", '%Y-%m-%d')
         filename = 'elo_ratings_yearend_2009.csv'
     if input1==2:
         print('Type desired start date in the format YYYY-MM-DD.')
@@ -152,46 +253,87 @@ def main():
         print('Type the name of the file used for the start elos (including .csv suffix).')
         filename = input()
     
-    # Make appropriate transformations
+    # Make appropriate transformations to M
     M=sort_matches_table(master,startdate)
     M=transform_to_set_format(M)
+
+    # Add players without a start elo to P
     P = pd.read_csv(filename)
+    if 'elo_hard' not in P.columns:
+        P["elo_hard"] = P.elo_overall
+        P["match_number_hard"] = 0
+    if 'elo_clay' not in P.columns:
+        P["elo_clay"] = P.elo_overall
+        P["match_number_clay"] = 0
+    if 'elo_grass' not in P.columns:
+        P["elo_grass"] = P.elo_overall
+        P["match_number_grass"] = 0
     all_names = set(M.winner_name).union(set(M.loser_name))
     available_names = set(P.Name)
     unavalaible_names = all_names.difference(available_names)
     P_unavailable = pd.DataFrame(unavalaible_names,columns=['Name'])
-    P_unavailable["EloRating"]=1400
-    P_unavailable["match_number"]=0
+    P_unavailable["elo_overall"] = 1400
+    P_unavailable["match_number"] = 0
+    P_unavailable["elo_hard"] = 1400
+    P_unavailable["elo_clay"] = 1400
+    P_unavailable["elo_grass"] = 1400
+    P_unavailable["match_number_hard"] = 0
+    P_unavailable["match_number_clay"] = 0
+    P_unavailable["match_number_grass"] = 0
     P=pd.concat([P,P_unavailable]).reset_index(drop=True)
+    P["previous_match"] = np.nan
 
-    # Ask user if they want to use default parameters or set parameters manually
-    print('Do you want to use the default parameters for Elo algorithm (type 1) or set values manually (type 2)?')
-    input2 = int(input())
-    if input2==1:
-        c=250
-        o=20
-        s1=0.6
-        initial_elo=1400
-        recentdays=75
-        penaltyfactor=0.98
-    elif input2==2:
-        print('Specify constant c.')
+
+    c=250
+    c_hard = 280
+    c_clay = 300
+    c_grass = 350
+    o=20
+    s1=0.6
+    initial_elo=1400
+    recentdays=75
+    penaltyfactor=0.98
+    if input2==2:
+        print('Specify constant c (default setting is {}).'.format(c))
         c=float(input())
-        print('Specify small offset o.')
+        print('Specify constant c_hard (default setting is {}).'.format(c_hard))
+        c_hard = float(input())
+        print('Specify constant c_clay (default setting is {}).'.format(c_clay))
+        c_clay = float(input())
+        print('Specify constant c_grass (default setting is {}).'.format(c_grass))
+        c_grass = float(input())
+        print('Specify small offset o (default setting is {}).'.format(o))
         o=float(input())
-        print('Specify shape parameter s')
+        print('Specify shape parameter s (default setting is {}).'.format(s1))
         s1=float(input())
-        print('Specify the Elo rating that is given to new players')
+        print('Specify the Elo rating that is given to new players (default setting is {}).'.format(initial_elo))
         initial_elo=float(input())
         recentdays=75
         penaltyfactor=0.98
+    n=len(M.index)
+    expected_time = round((n/10000)*100/60)
+    print('Starting with the iterative algorithm over {} rows, expect about {} minutes for the program to complete.'.format(n,expected_time))
+    elapsed_total = 0
+    for j in range(floor(n/10000)):
+        start_row = j*10000
+        end_row = (j+1)*10000-1
+        M,P,elapsed = update_elo(M,P,c,c_hard,c_clay,c_grass,o,s1,initial_elo,recentdays,penaltyfactor,start_row,end_row)
+        elapsed_total+=elapsed
+        #print('Rows {} up to {} are succesfully calculated.'.format((start_row+1),(end_row+1)))
+    start_row = (floor(n/10000))*10000
+    end_row = n-1
+    M,P,elapsed = update_elo(M,P,c,c_hard,c_clay,c_grass,o,s1,initial_elo,recentdays,penaltyfactor,start_row,end_row)
+    elapsed_total+=elapsed
+    print('Done calculating. This took {} minutes'.format(elapsed_total/60))
 
-    print('Starting to calculate (Note: This is an iterative algorith, therefore this may take a while).')
-    M,P = update_elo(M,P,c,o,s1,initial_elo,recentdays,penaltyfactor)
-
-    M.to_csv('matches2.csv',index=False)
-    print('Succesfully wrote file \"matches2.csv\".')
+    #M = M.drop(["date2","winner_setswon","loser_setswon"], axis=1)
+    M = M.loc[:,["match-id","winner_previous_match","loser_previous_match","winner_elo","loser_elo","winner_elo_surface","loser_elo_surface"]]
+    M.to_csv('elos.csv',index=False)
+    print('Succesfully wrote to file \"elos.csv\".')
     P.to_csv('players_elos.csv',index=False)
-    print('Succesfully written file \"players_elos.csv\".')
-
+    print('Succesfully wrote to file \"players_elos.csv\".')
+    
+    P_small = P.loc[0:9,["Name","elo_overall"]]
+    print("Just for fun. This is the top 10 according to overall elo:")
+    print(P_small)
 main()
