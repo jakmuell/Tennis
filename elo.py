@@ -328,7 +328,7 @@ def main():
     print('Done calculating. This took {} minutes'.format(elapsed_total/60))
 
     #M = M.drop(["date2","winner_setswon","loser_setswon"], axis=1)
-    M = M.loc[:,["match-id","winner_previous_match","loser_previous_match","winner_elo","loser_elo","winner_elo_surface","loser_elo_surface"]]
+    M = M.loc[:,["match_id","winner_previous_match","loser_previous_match","winner_elo","loser_elo","winner_elo_surface","loser_elo_surface"]]
     M.to_csv('elos.csv',index=False)
     print('Succesfully wrote to file \"elos.csv\".')
     P.to_csv('players_elos.csv',index=False)
