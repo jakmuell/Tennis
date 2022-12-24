@@ -198,6 +198,11 @@ def update_elo(M,P,c,c_hard,c_clay,c_grass,o,s1,initial_elo,recentdays,penaltyfa
         w_setwinprob_surface = 1/(1+10**((l_elo_old_surface-w_elo_old_surface)/400))
         w_K_surface=w_activityfactor*c_surface/(w_match_number_surface+o)**s1
         l_K_surface=l_activityfactor*c_surface/(l_match_number_surface+o)**s1
+        if M.tourney_level[i] == "Exhibition":
+            w_K //= 2
+            l_K //= 2
+            w_K_surface //= 2
+            l_K_surface //= 2
         M.loc[i,"winner_elo_surface"]=w_elo_old_surface+w_K_surface*M.winner_setswon[i]-w_setwinprob_surface*w_K_surface*total_sets
         M.loc[i,"loser_elo_surface"]=l_elo_old_surface+l_K_surface*total_sets*w_setwinprob_surface-M.winner_setswon[i]*l_K_surface
         if surface == "Hard":
@@ -233,6 +238,11 @@ def main():
 
     # Read matches.csv
     master = pd.read_csv('matches.csv')
+
+    # Add columns surface and tourney_level
+    T = pd.read_csv('tournaments.csv')
+    T = T.loc[:,["id","surface","tourney_level"]]
+    master = pd.merge(master,T,how="left",left_on="tourney_id",right_on='id')
 
     # Ask user if they want to calculate everything or only rows from a start point
     print('You may either calculate everything from scratch or from a specific start date.')
